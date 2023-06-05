@@ -5,13 +5,10 @@ MYLIBDIR=../mynet
 MYLIB=-lmynet
 CFLAGS=-I${MYLIBDIR} -L${MYLIBDIR}
 
-all: echo_server2 echo_client2
+all: echo_server3
 
-echo_server2: echo_server2.o
-	${CC} ${CFLAGS} -o $@ $^ ${MYLIB}
-
-echo_client2: echo_client2.o
+echo_server3: echo_server3.o
 	${CC} ${CFLAGS} -o $@ $^ ${MYLIB}
 
 clean:
-	${RM} *.o echo_server2 echo_client2 *~
+	${RM} *.o echo_server3 *~

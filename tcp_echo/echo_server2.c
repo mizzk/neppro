@@ -1,24 +1,12 @@
 #include "mynet.h"
 
-#define PORT 50000  /* ポート番号 */
+#define PORT 50000  /* デフォルトのポート番号 */
 #define BUFSIZE 100 /* バッファサイズ */
 
-int main(int argc, char *argv[]) {
-    int sock_listen, sock_accepted;
+void handle_client(int sock_accepted) {
     char client_message[BUFSIZE], output_text[BUFSIZE];
     int strsize;
-    int port_number = PORT;
     FILE *fp;
-
-    if (argc == 2) {
-        port_number = atoi(argv[1]);
-    }
-
-    sock_listen = init_tcpserver(port_number, 5);
-
-    /* クライアントの接続を受け付ける */
-    sock_accepted = accept(sock_listen, NULL, NULL);
-    close(sock_listen);
 
     do {
         // ">" をクライアントに送信
@@ -45,7 +33,7 @@ int main(int argc, char *argv[]) {
             pclose(fp);
 
         }
-        //typeコマンドの場合
+        // typeコマンドの場合
         else if (strncmp(client_message, "type", 4) == 0) {
             char cmd[BUFSIZE];
             char *file_name = client_message + 5;
@@ -62,17 +50,34 @@ int main(int argc, char *argv[]) {
 
             pclose(fp);
         }
-        //exitコマンドの場合
+        // exitコマンドの場合
         else if (strcmp(client_message, "exit") == 0) {
             break;
         }
-        //それ以外のコマンドの場合
+        // それ以外のコマンドの場合
         else {
             if (send(sock_accepted, "Invalid command\n", 17, 0) == -1) {
                 exit_errmesg("send()");
             }
         }
     } while (1); /* 繰り返す */
+}
+
+int main(int argc, char *argv[]) {
+    int sock_listen, sock_accepted;
+    int port_number = PORT;
+
+    if (argc == 2) {
+        port_number = atoi(argv[1]);
+    }
+
+    sock_listen = init_tcpserver(port_number, 5);
+
+    /* クライアントの接続を受け付ける */
+    sock_accepted = accept(sock_listen, NULL, NULL);
+    close(sock_listen);
+
+    handle_client(sock_accepted);
 
     close(sock_accepted);
 
