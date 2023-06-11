@@ -59,6 +59,15 @@ void chat_client(char *servername, int port_number) {
 
             // 終了コマンドのチェック
             if (s_buf == "Q") {
+                // サーバから切断する
+                close(sock);
+
+                // 画面を消去
+                werase(win_main);
+                werase(win_sub);
+
+                // 画面を元に戻す
+                endwin();
                 break;
             }
 
@@ -82,7 +91,13 @@ void chat_client(char *servername, int port_number) {
 
             // 問題(2) サーバダウン時の処理
             if (strsize == 0) {
-                wprintw(win_main, "Server is down.\n");
+                // 画面を消去
+                werase(win_main);
+                werase(win_sub);
+
+                // 画面を元に戻す
+                endwin();
+                printf("Server is down.\n");
                 break;
             }
 
@@ -93,16 +108,6 @@ void chat_client(char *servername, int port_number) {
             wrefresh(win_main);
         }
     }
-
-    // サーバから切断する
-    close(sock);
-
-    // 画面を消去
-    werase(win_main);
-    werase(win_sub);
-
-    // 画面を元に戻す
-    endwin();
 
     exit(EXIT_SUCCESS);
 }
