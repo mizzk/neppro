@@ -3,7 +3,7 @@
 # 21122051 MIZUTANI Kota
 #
 MYLIBDIR=../mynet
-MYLIB=-lmynet
+MYLIB=-lmynet -lncurses
 CFLAGS=-I${MYLIBDIR} -L${MYLIBDIR}
 OBJS=chat.o chat_server.o chat_client.o chat_util.o chat_common.o
 
