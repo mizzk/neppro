@@ -90,18 +90,6 @@ void chat_client(char *servername, int port_number) {
         if (FD_ISSET(sock, &readfds)) {
             strsize = Recv(sock, r_buf, R_BUFSIZE - 1, 0);
 
-            // 問題(2) サーバダウン時の処理
-            if (strsize == 0) {
-                // 画面を消去
-                werase(win_main);
-                werase(win_sub);
-
-                // 画面を元に戻す
-                endwin();
-                printf("Server is down.\n");
-                break;
-            }
-
             r_buf[strsize] = '\0';
             wprintw(win_main, "%s\n", r_buf);
 

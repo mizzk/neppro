@@ -1,3 +1,6 @@
+// chat_server.c
+// 21122051 MIZUTANI Kota
+// 作成にあたって工夫・苦労した点はchat.c冒頭に記載しています。
 #include "mynet.h"
 
 int Accept(int s, struct sockaddr *addr, socklen_t *addrlen) {

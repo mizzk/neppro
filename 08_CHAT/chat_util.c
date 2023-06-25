@@ -1,5 +1,6 @@
 // chat_util.c
 // 21122051 MIZUTANI Kota
+// 作成にあたって工夫・苦労した点はchat.c冒頭に記載しています。
 #include <stdlib.h>
 #include <sys/select.h>
 
