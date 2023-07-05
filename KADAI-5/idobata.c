@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#include <arpa/inet.h>
 
 #include "mynet.h"
 
@@ -33,7 +34,7 @@ extern char *optarg;
 extern int optind, opterr, optopt;
 
 // グローバル変数
-char *server_ip;  // HEREパケットを受信したサーバのIPアドレス
+char server_address[512];  // HEREパケットを受信したサーバのIPアドレス
 
 // パケットを作成する関数
 char *create_packet(char *buffer, u_int32_t type, char *message) {
@@ -146,10 +147,10 @@ int start_idobata(int port_number) {
             r_buf[strsize] = '\0';
             if (analyze_header(r_buf) == HERE) {
                 // 受信したパケットからサーバのIPアドレスを取得
-                fprintf(stdout, "Received HERE packet from %s\n",
-                        inet_ntoa(from_adrs.sin_addr));
-                snprintf(server_ip, INET_ADDRSTRLEN, "%s",
-                         inet_ntoa(from_adrs.sin_addr));
+                fprintf(stdout, "Received HERE packet from %s\n", inet_ntoa(from_adrs.sin_addr));
+                strcpy(server_address, inet_ntoa(from_adrs.sin_addr));
+                // snprintf(server_ip, INET_ADDRSTRLEN, "%s", inet_ntoa(from_adrs.sin_addr));
+                // printf("%s\n", server_ip);
                 return 0;  // クライアントとして起動
             }
         }
@@ -165,15 +166,16 @@ void idobata_client(char *username, int port_number) {
     fd_set mask, readfds;
 
     idobata_packet *packet;
-
+    printf("%s\n%d\n", server_address, port_number);
     // サーバに接続する
-    sock = init_tcpclient(server_ip, port_number);
+    sock = init_tcpclient(server_address, port_number);
 
     // サーバに接続完了したら，JOIN usernameを送信する
     if (sock != -1) {
         // 送信するパケットを作成する
         create_packet(s_buf, JOIN, username);
         strsize = strlen(s_buf);
+        printf("%s\n", s_buf);
 
         // パケットを送信する
         if (send(sock, s_buf, strsize, 0) == -1) {
@@ -224,7 +226,9 @@ void idobata_client(char *username, int port_number) {
                     // メッセージを表示する
                     packet = (idobata_packet *)r_buf;
                     fprintf(stdout, "%s\n", packet->data);
+                    break;
                 default:
+                    break;
                     // 何もしない
             }
         }
