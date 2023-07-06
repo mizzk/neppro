@@ -1,0 +1,21 @@
+// パケットをクライアントから受信する
+    if ((strsize = recv(sock_accepted, r_buf, PACKET_LEN, 0)) == -1) {
+        exit_errmesg("recv()");
+    }
+    r_buf[strsize] = '\0';
+    packet = (idobata_packet *)r_buf;
+
+    // パケットのヘッダを解析する
+    switch (analyze_header(packet->header)) {
+        case JOIN:
+            // usernameを接続しているソケット番号と関連づけて記録する
+            add_imember(&userlist_head, packet->data, sock_accepted);
+
+            // ユーザ名を表示する
+            printf("%s joined!(l.333)\n",
+                   get_username(userlist_head, sock_accepted));
+            break;
+        default:
+            break;
+            // 何もしない
+    }

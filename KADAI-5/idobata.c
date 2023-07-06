@@ -1,11 +1,11 @@
 // idobata.c
 // 21122051 MIZUTANI Kota
 
+#include <arpa/inet.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/select.h>
 #include <sys/time.h>
-#include <arpa/inet.h>
 
 #include "mynet.h"
 
@@ -20,7 +20,7 @@
 #define MESSAGE_LEN 256     // メッセージ格納用バッファサイズ
 #define PACKET_LEN 512      // パケット格納用バッファサイズ
 #define DEFAULT_PORT 50001  // ポート番号のデフォルト値
-#define TIMEOUT_SEC 5       // タイムアウト時間
+#define TIMEOUT_SEC 1       // タイムアウト時間
 
 // パケットの構造を表す構造体
 typedef struct {
@@ -29,12 +29,58 @@ typedef struct {
     char data[];
 } idobata_packet;
 
+// ユーザの情報を格納する構造体
+typedef struct _imember {
+    char username[USERNAME_LEN]; /* ユーザ名 */
+    int sock;                    /* ソケット番号 */
+    struct _imember *next;       /* 次のユーザ */
+} *imember;
+
 // オプション用文字列
 extern char *optarg;
 extern int optind, opterr, optopt;
 
 // グローバル変数
 char server_address[512];  // HEREパケットを受信したサーバのIPアドレス
+
+// imember構造体の追加関数
+void add_imember(imember *head, char *username, int sock) {
+    imember p, q;
+
+    // メモリの確保
+    if ((p = (imember)malloc(sizeof(struct _imember))) == NULL) {
+        exit_errmesg("malloc()");
+    }
+
+    // メンバの設定
+    snprintf(p->username, USERNAME_LEN, "%s", username);
+    p->sock = sock;
+    p->next = NULL;
+
+    // リストの最後に追加する
+    if (*head == NULL) {
+        *head = p;
+    } else {
+        q = *head;
+        while (q->next != NULL) {
+            q = q->next;
+        }
+        q->next = p;
+    }
+}
+
+// imember構造体のsocket番号からusernameを取得する関数
+char *get_username(imember head, int sock) {
+    imember p;
+    p = head;
+    while (p != NULL) {
+        if (p->sock == sock) {
+            return p->username;
+        }
+        p = p->next;
+    }
+    return NULL;
+}
 
 // パケットを作成する関数
 char *create_packet(char *buffer, u_int32_t type, char *message) {
@@ -147,10 +193,11 @@ int start_idobata(int port_number) {
             r_buf[strsize] = '\0';
             if (analyze_header(r_buf) == HERE) {
                 // 受信したパケットからサーバのIPアドレスを取得
-                fprintf(stdout, "Received HERE packet from %s\n", inet_ntoa(from_adrs.sin_addr));
+                fprintf(stdout, "Received HERE packet from %s\n",
+                        inet_ntoa(from_adrs.sin_addr));
                 strcpy(server_address, inet_ntoa(from_adrs.sin_addr));
-                // snprintf(server_ip, INET_ADDRSTRLEN, "%s", inet_ntoa(from_adrs.sin_addr));
-                // printf("%s\n", server_ip);
+                // snprintf(server_ip, INET_ADDRSTRLEN, "%s",
+                // inet_ntoa(from_adrs.sin_addr)); printf("%s\n", server_ip);
                 return 0;  // クライアントとして起動
             }
         }
@@ -166,7 +213,7 @@ void idobata_client(char *username, int port_number) {
     fd_set mask, readfds;
 
     idobata_packet *packet;
-    printf("%s\n%d\n", server_address, port_number);
+    printf("%s\n%d\n", server_address, port_number);  // debug
     // サーバに接続する
     sock = init_tcpclient(server_address, port_number);
 
@@ -175,7 +222,7 @@ void idobata_client(char *username, int port_number) {
         // 送信するパケットを作成する
         create_packet(s_buf, JOIN, username);
         strsize = strlen(s_buf);
-        printf("%s\n", s_buf);
+        printf("%s\n", s_buf);  // debug
 
         // パケットを送信する
         if (send(sock, s_buf, strsize, 0) == -1) {
@@ -218,6 +265,7 @@ void idobata_client(char *username, int port_number) {
             if ((strsize = recv(sock, r_buf, PACKET_LEN, 0)) == -1) {
                 exit_errmesg("recv()");
             }
+            r_buf[strsize] = '\0';
             packet = (idobata_packet *)r_buf;
 
             // パケットのヘッダを解析する
@@ -237,6 +285,103 @@ void idobata_client(char *username, int port_number) {
     close(sock);
 
     exit(EXIT_SUCCESS);
+}
+
+void idobata_server(char *username, int port_numeber) {
+    struct sockaddr_in from_adrs;
+    int sock_listen, sock_accepted, from_len, strsize;
+    char s_buf[PACKET_LEN], r_buf[PACKET_LEN], k_buf[MESSAGE_LEN];
+    idobata_packet *packet;
+    imember userlist_head = NULL;
+    fd_set mask, readfds;
+
+    // 1.UDPポート(デフォルト50001番)を監視し、「HELO」パケットが送られてきたら
+    // 送ってきた相手に「HERE」パケットを送り返す。
+    sock_listen = init_udpserver(port_numeber);
+
+    // 文字列をクライアントから受信する
+    from_len = sizeof(from_adrs);
+    Recvfrom(sock_listen, r_buf, PACKET_LEN, 0, (struct sockaddr *)&from_adrs,
+             &from_len);
+
+    // 送信するパケットを作成する
+    create_packet(s_buf, HERE, NULL);
+    strsize = strlen(s_buf);
+    printf("%s\n", s_buf);  // debug
+    // 文字列をクライアントに送信する
+    Sendto(sock_listen, s_buf, strsize, 0, (struct sockaddr *)&from_adrs,
+           sizeof(from_adrs));
+
+    // 2.TCPポートを監視し，クライアントからの接続を待ち受ける
+    puts("sock_listen");
+    sock_listen = init_tcpserver(port_numeber, 5);
+    puts("sock_accepted");
+    sock_accepted = accept(sock_listen, NULL, NULL);
+    close(sock_listen);
+    puts("debug0");
+
+    // 3.上記で接続したクライアントから「JOIN
+    // username」という内容のメッセージ
+    // (usernameの部分は起動時に指定した各ユーザのユーザ名）を受信したら、そのusernameを
+    // 接続しているソケット番号と関連づけて記録する(ログイン完了)。
+    // クライアントとの接続状態はそのまま保持する。
+    // パケットをクライアントから受信する
+    if ((strsize = recv(sock_accepted, r_buf, PACKET_LEN, 0)) == -1) {
+        exit_errmesg("recv()");
+    }
+    r_buf[strsize] = '\0';
+    packet = (idobata_packet *)r_buf;
+
+    // パケットのヘッダを解析する
+    switch (analyze_header(packet->header)) {
+        case JOIN:
+            // usernameを接続しているソケット番号と関連づけて記録する
+            add_imember(&userlist_head, packet->data, sock_accepted);
+
+            // ユーザ名を表示する
+            printf("%s joined!(l.333)\n",
+                   get_username(userlist_head, sock_accepted));
+            break;
+        default:
+            break;
+            // 何もしない
+    }
+
+    // ビットマスクの準備
+    FD_ZERO(&mask);
+    FD_SET(0, &mask);
+    FD_SET(sock_accepted, &mask);
+
+    for(;;) {
+        readfds = mask;
+        select(sock_accepted + 1, &readfds, NULL, NULL, NULL);
+
+        // キーボードからの入力をチェック
+        if (FD_ISSET(0, &readfds)) {
+            fgets(k_buf, MESSAGE_LEN, stdin);
+            k_buf[strlen(k_buf) - 1] = '\0';
+
+            char str1[USERNAME_LEN + 4];
+            snprintf(str1, USERNAME_LEN, "[%s] ", username);
+            strcat(str1, k_buf);
+
+            // パケットの作成
+            create_packet(s_buf, MESSAGE, str1);
+            strsize = strlen(s_buf);
+
+            // ユーザリストの全ユーザにパケットを送信する
+            puts("send to all users");
+            imember p;
+            p = userlist_head;
+            while (p != NULL) {
+                if (send(p->sock, s_buf, strsize, 0) == -1) {
+                    exit_errmesg("send()");
+                }
+                p = p->next;
+            }
+        }
+    }
+
 }
 
 int main(int argc, char *argv[]) {
@@ -278,8 +423,7 @@ int main(int argc, char *argv[]) {
     } else {
         printf("Start as a server.\n");
         // サーバとして起動
-        // 今回は実装しないので，エラーを出力して終了
-        fprintf(stderr, "Server mode is not implemented.\n");
+        idobata_server(username, port_number);
         exit(EXIT_FAILURE);
     }
     exit(EXIT_SUCCESS);
