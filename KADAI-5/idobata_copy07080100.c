@@ -2,10 +2,11 @@
 // 21122051 MIZUTANI Kota
 
 #include <arpa/inet.h>
-#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <sys/select.h>
 #include <sys/time.h>
-#include <unistd.h>
+#include <pthread.h>
 
 #include "mynet.h"
 
@@ -30,19 +31,11 @@ typedef struct {
 } idobata_packet;
 
 // ユーザの情報を格納する構造体
-typedef struct imember {
+typedef struct _imember {
     char username[USERNAME_LEN]; /* ユーザ名 */
     int sock;                    /* ソケット番号 */
-    struct imember *next;        /* 次のユーザ */
-} imember;
-
-// スレッド関数の引数
-struct myarg {
-    char username[USERNAME_LEN];
-    int sock;
-    int port;
-    pthread_t *tid;
-};
+    struct _imember *next;       /* 次のユーザ */
+} *imember;
 
 // オプション用文字列
 extern char *optarg;
@@ -53,51 +46,60 @@ char server_address[512];  // HEREパケットを受信したサーバのIPア�
 
 // imember構造体の追加関数
 void add_imember(imember *head, char *username, int sock) {
-    imember *p;
+    imember p, q;
 
-    // リストの末尾まで移動する
-    p = head;
-    while (p->next != NULL) {
-        p = p->next;
+    // メモリの確保
+    if ((p = (imember)malloc(sizeof(struct _imember))) == NULL) {
+        exit_errmesg("malloc()");
     }
 
-    // 新しいノードを作成する
-    p->next = (imember *)malloc(sizeof(imember));
-    p = p->next;
-    if (username != NULL) {
-        strcpy(p->username, username);
-    }
+    // メンバの設定
+    snprintf(p->username, USERNAME_LEN, "%s", username);
     p->sock = sock;
     p->next = NULL;
+
+    // リストの最後に追加する
+    if (*head == NULL) {
+        *head = p;
+    } else {
+        q = *head;
+        while (q->next != NULL) {
+            q = q->next;
+        }
+        q->next = p;
+    }
 }
 
 // imember構造体の削除関数
 void delete_imember(imember *head, int sock) {
-    imember *p, *q;
+    imember p, q;
 
     // リストの先頭から探索する
-    p = head;
-    while (p->next != NULL) {
-        if (p->next->sock == sock) {
-            // ノードを削除する
-            q = p->next;
-            p->next = p->next->next;
-            free(q);
+    p = *head;
+    q = NULL;
+    while (p != NULL) {
+        if (p->sock == sock) {
+            // 見つかったらリストから削除する
+            if (q == NULL) {
+                *head = p->next;
+            } else {
+                q->next = p->next;
+            }
+            free(p);
             return;
         }
+        q = p;
         p = p->next;
     }
 }
 
 // imember構造体のsocket番号からusernameを取得する関数
-char *get_username(imember *head, int sock) {
-    imember *p;
-
-    // リストの先頭から探索する
+char *get_username(imember head, int sock) {
+    imember p;
     p = head;
-    while (p->next != NULL) {
-        if (p->next->sock == sock) {
-            return p->next->username;
+    while (p != NULL) {
+        if (p->sock == sock) {
+            return p->username;
         }
         p = p->next;
     }
@@ -309,205 +311,225 @@ void idobata_client(char *username, int port_number) {
     exit(EXIT_SUCCESS);
 }
 
-// UDPスレッドの本体
-void *udp_thread(void *arg) {
-    printf("*** udp_thread called\n");
-    // 変数定義
-    struct myarg **tharg;
-    tharg = (struct myarg **)arg;
-
+void idobata_server(char *username, int port_numeber) {
     struct sockaddr_in from_adrs;
-    socklen_t from_len = sizeof(from_adrs);
-    int sock_udp;
+    int sock_listen, sock_udp, sock_tcp, sock_accepted, from_len, strsize, max_fd;
+    char s_buf[PACKET_LEN], r_buf[PACKET_LEN], k_buf[MESSAGE_LEN];
+    idobata_packet *packet;
+    imember imember_tmp, userlist_head = NULL;
+    fd_set mask, readfds;
 
-    char s_buf[PACKET_LEN], r_buf[PACKET_LEN];
+    // 1.UDPポート(デフォルト50001番)を監視し、「HELO」パケットが送られてきたら
+    // 送ってきた相手に「HERE」パケットを送り返す。
+    sock_udp = init_udpserver(port_numeber);
 
-    // UDPの準備
-    sock_udp = init_udpserver((*tharg)->port);
+    // 文字列をクライアントから受信する
+    from_len = sizeof(from_adrs);
+
+    sock_tcp = init_tcpserver(port_numeber, 5);
 
     for (;;) {
-        // パケットを受信する
         Recvfrom(sock_udp, r_buf, PACKET_LEN, 0, (struct sockaddr *)&from_adrs,
                  &from_len);
-        r_buf[PACKET_LEN - 1] = '\0';
-
-        // パケットのヘッダを解析する
         if (analyze_header(r_buf) == HELLO) {
-            printf("*** R:%s\n", r_buf);  // debug
-            // HELLOパケットを受信したら，HEREパケットを返信する
+            // 送信するパケットを作成する
             create_packet(s_buf, HERE, NULL);
-            printf("*** S:%s\n", s_buf);  // debug
-            Sendto(sock_udp, s_buf, strlen(s_buf), 0,
-                   (struct sockaddr *)&from_adrs, sizeof(from_adrs));
+            strsize = strlen(s_buf);
+            printf("%s\n", s_buf);  // debug
+            // 文字列をクライアントに送信する
+            Sendto(sock_udp, s_buf, strsize, 0, (struct sockaddr *)&from_adrs,
+                   sizeof(from_adrs));
         }
-    }
-}
 
-// TCPスレッドの本体
-void *tcp_thread(void *arg) {
-    printf("*** tcp_thread called\n");
-    // 変数定義
-    struct myarg **tharg;
-    tharg = (struct myarg **)arg;
+        FD_ZERO(&mask);
+        FD_SET(sock_tcp, &mask);
 
-    int sock_tcp, sd;
-
-    imember *head = (imember *)malloc(sizeof(imember));
-    imember *p = head;
-
-    char s_buf[PACKET_LEN], r_buf[PACKET_LEN], k_buf[MESSAGE_LEN];
-
-    // TCPの準備
-    sock_tcp = init_tcpserver((*tharg)->port, 5);
-    printf("*** sock_tcp:%d\n", sock_tcp);  // debug
-
-    fd_set readfds;
-    int maxfd;
-
-    for (;;) {
-        FD_ZERO(&readfds);
-        FD_SET(STDIN_FILENO, &readfds);
-        FD_SET(sock_tcp, &readfds);
-        maxfd = sock_tcp;
-
-        p = head;
-        while (p != NULL) {
-            FD_SET(p->sock, &readfds);
-            if (maxfd < p->sock) {
-                maxfd = p->sock;
+        max_fd = sock_tcp;
+        imember_tmp = userlist_head;
+        while(imember_tmp != NULL){
+            FD_SET(imember_tmp->sock, &mask);
+            if(imember_tmp->sock > max_fd){
+                max_fd = imember_tmp->sock;
             }
-            p = p->next;
+            imember_tmp = imember_tmp->next;
         }
 
-        select(maxfd + 1, &readfds, NULL, NULL, NULL);
-        printf("*** select called\n");
+        select(max_fd + 1, &mask, NULL, NULL, NULL);
+
+        if(FD_ISSET(sock_tcp, &mask)){
+            sock_accepted = accept(sock_tcp, NULL, NULL);
+            add_imember(&userlist_head, NULL, sock_accepted);
+        }
 
         // キーボードからの入力をチェック
-        if (FD_ISSET(STDIN_FILENO, &readfds)) {
+        if (FD_ISSET(0, &mask)) {
             fgets(k_buf, MESSAGE_LEN, stdin);
             k_buf[strlen(k_buf) - 1] = '\0';
 
-            if (strcmp(k_buf, "QUIT") == 0) {
-                close((*tharg)->sock);
-                exit(EXIT_SUCCESS);
-            }
             char str1[USERNAME_LEN + 4];
-            snprintf(str1, USERNAME_LEN, "[%s] ", (*tharg)->username);
+            snprintf(str1, USERNAME_LEN, "[%s] ", username);
             strcat(str1, k_buf);
 
             // パケットの作成
             create_packet(s_buf, MESSAGE, str1);
+            strsize = strlen(s_buf);
 
             // ユーザリストの全ユーザにパケットを送信する
-            imember *q = head->next;
-            while (q != NULL) {
-                if (q->sock != sock_tcp) {
-                    printf("*** S:%s\n", s_buf);  // debug
-                    send(q->sock, s_buf, strlen(s_buf), 0);
-                }
-                q = q->next;
-            }
-        } else {
-            if (FD_ISSET(sock_tcp, &readfds)) {
-                // クライアントからの接続を受け付ける
-                sd = accept(sock_tcp, NULL, NULL);
-                printf("*** accept called\n");
-
-                add_imember(head, "unknown", sd);
-            }
-
-            p = head;
+            puts("send to all users");
+            imember p;
+            p = userlist_head;
             while (p != NULL) {
-                sd = p->sock;
-
-                if (FD_ISSET(p->sock, &readfds)) {
-                    // パケットを受信する
-                    int strsize;
-                    printf("*** recv around 424 start\n");
-                    if ((strsize = recv(p->sock, r_buf, PACKET_LEN, 0)) == -1) {
-                        exit_errmesg("recv()");
-                    }
-                    printf("*** recv around 424 end\n");
-                    printf("*** recv called\n");
-                    r_buf[strsize] = '\0';
-                    idobata_packet *packet = (idobata_packet *)r_buf;
-
-                    // パケットのヘッダを解析する
-                    switch (analyze_header(packet->header)) {
-                        case JOIN:
-                            printf("*** R:JOIN %s\n", packet->data);
-                            // JOINパケットを受信したら，usernameを設定(最大文字数はUSERNAME_LEN)
-                            strncpy(p->username, packet->data, USERNAME_LEN);
-                            printf("*** username registered :%s\n",
-                                   packet->data);  // debug
-
-                            // 現在のユーザリストを表示する
-                            printf("*** current users:\n");
-                            imember *q = head;
-                            while (q != NULL) {
-                                printf("*** %s\n", q->username);
-                                q = q->next;
-                            }
-                            printf("*** end of users\n");
-
-                            break;
-                        case POST:
-                            printf("*** R:POST %s\n", packet->data);
-                            // POSTパケットを受信したら，メッセージを表示する
-                            // メッセージを作成
-                            char str1[MESSAGE_LEN];
-                            snprintf(str1, PACKET_LEN, "[%s] %s",
-                                     get_username(head, p->sock), packet->data);
-                            create_packet(s_buf, MESSAGE, str1);
-
-                            // メッセージ他メンバーに送信する
-                            q = head;
-                            while (q != NULL) {
-                                if (q->sock != p->sock) {
-                                    send(q->sock, s_buf, strlen(s_buf), 0);
-                                }
-                                q = q->next;
-                            }
-                            // メッセージを表示する
-                            printf("%s\n", str1);
-                            break;
-                        case QUIT:
-                            // QUITパケットを受信したら，接続を閉じてユーザを削除する
-                            printf("%s has left.\n", p->username);
-                            close(p->sock);
-                            delete_imember(head, p->sock);
-
-                            // 現在のユーザリストを表示する
-                            printf("*** current users:\n");
-                            imember *r = head;
-                            while (r != NULL) {
-                                printf("*** %s\n", r->username);
-                                r = r->next;
-                            }
-                            printf("*** end of users\n");
-                            break;
-                    }
+                if (send(p->sock, s_buf, strsize, 0) == -1) {
+                    exit_errmesg("send()");
                 }
                 p = p->next;
             }
         }
+
+        imember_tmp = userlist_head;
+        while(imember_tmp != NULL){
+            sock_accepted = imember_tmp->sock;
+            if(FD_ISSET(sock_accepted, &mask)){
+                if((strsize = recv(sock_accepted, r_buf, PACKET_LEN, 0)) == -1){
+                    exit_errmesg("recv()");
+                }
+                r_buf[strsize] = '\0';
+                packet = (idobata_packet *)r_buf;
+
+                switch(analyze_header(packet->header)){
+                    case JOIN:
+                        // usernameを接続しているソケット番号と関連づけて記録する
+                        add_imember(&userlist_head, packet->data, sock_accepted);
+
+                        // ユーザ名を表示する
+                        printf("%s joined!(l.333)\n",
+                               get_username(userlist_head, sock_accepted));
+                        break;
+                    case POST:
+                        // メッセージを表示する
+                        printf("%s\n", packet->data);
+
+                        // パケットの作成
+                        create_packet(s_buf, MESSAGE, packet->data);
+
+                        // ユーザリストの全ユーザにパケットを送信する．ただし，送信者には送信しない
+                        puts("send to all users");
+                        imember p;
+                        p = userlist_head;
+                        while (p != NULL) {
+                            if (p->sock != sock_accepted) {
+                                if (send(p->sock, s_buf, strsize, 0) == -1) {
+                                    exit_errmesg("send()");
+                                }
+                            }
+                            p = p->next;
+                        }
+                        break;
+                    case QUIT:
+                        // ユーザリストから削除する
+                        delete_imember(&userlist_head, sock_accepted);
+
+                        // ユーザ名を表示する
+                        printf("%s left!\n",
+                               get_username(userlist_head, sock_accepted));
+                        break;
+
+                    default:
+                        break;
+                        // 何もしない
+                }
+            }
+        }
     }
-}
 
-// サーバとしての処理を行う関数
-void idobata_server(char username[USERNAME_LEN], int port_number) {
-    printf("*** idobata server called\n");
-    // 変数定義
-    pthread_t tid;
-    struct myarg arg;
-    strcpy(arg.username, username);
-    arg.port = port_number;
-    arg.tid = &tid;
-    struct myarg *arg_p = &arg;
+    // // 2.TCPポートを監視し，クライアントからの接続を待ち受ける
+    // puts("sock_tcp");
 
-    pthread_create(arg.tid, NULL, udp_thread, (void *)&arg_p);
-    pthread_create(arg.tid, NULL, tcp_thread, (void *)&arg_p);
-    pthread_exit(NULL);
+    // // puts("sock_accepted");
+    // // sock_accepted = accept(sock_listen, NULL, NULL);
+    // // close(sock_listen);
+    // // puts("debug0");
+
+    // // 3.上記で接続したクライアントから「JOIN
+    // // username」という内容のメッセージ
+    // // (usernameの部分は起動時に指定した各ユーザのユーザ名）を受信したら、そのusernameを
+    // // 接続しているソケット番号と関連づけて記録する(ログイン完了)。
+    // // クライアントとの接続状態はそのまま保持する。
+    // // パケットをクライアントから受信する
+    // if ((strsize = recv(sock_accepted, r_buf, PACKET_LEN, 0)) == -1) {
+    //     exit_errmesg("recv()");
+    // }
+    // r_buf[strsize] = '\0';
+    // packet = (idobata_packet *)r_buf;
+
+    // // パケットのヘッダを解析する
+    // switch (analyze_header(packet->header)) {
+    //     case JOIN:
+    //         // usernameを接続しているソケット番号と関連づけて記録する
+    //         add_imember(&userlist_head, packet->data, sock_accepted);
+
+    //         // ユーザ名を表示する
+    //         printf("%s joined!(l.333)\n",
+    //                get_username(userlist_head, sock_accepted));
+    //         break;
+    //     default:
+    //         break;
+    //         // 何もしない
+    // }
+
+    // for (;;) {
+    //     FD_ZERO(&readfds);
+    //     FD_SET(sock_listen, &readfds);
+
+    //     select(sock_accepted + 1, &readfds, NULL, NULL, NULL);
+
+    //     // キーボードからの入力をチェック
+    //     if (FD_ISSET(0, &readfds)) {
+    //         fgets(k_buf, MESSAGE_LEN, stdin);
+    //         k_buf[strlen(k_buf) - 1] = '\0';
+
+    //         char str1[USERNAME_LEN + 4];
+    //         snprintf(str1, USERNAME_LEN, "[%s] ", username);
+    //         strcat(str1, k_buf);
+
+    //         // パケットの作成
+    //         create_packet(s_buf, MESSAGE, str1);
+    //         strsize = strlen(s_buf);
+
+    //         // ユーザリストの全ユーザにパケットを送信する
+    //         puts("send to all users");
+    //         imember p;
+    //         p = userlist_head;
+    //         while (p != NULL) {
+    //             if (send(p->sock, s_buf, strsize, 0) == -1) {
+    //                 exit_errmesg("send()");
+    //             }
+    //             p = p->next;
+    //         }
+    //     }
+
+    //     // クライアントからの受信をチェック
+    //     if (FD_ISSET(sock_accepted, &readfds)) {
+    //         // パケットを受信する
+    //         if ((strsize = recv(sock_accepted, r_buf, PACKET_LEN, 0)) == -1) {
+    //             exit_errmesg("recv()");
+    //         }
+    //         r_buf[strsize] = '\0';
+    //         packet = (idobata_packet *)r_buf;
+
+    //         // パケットのヘッダを解析する
+    //         switch (analyze_header(packet->header)) {
+    //             case POST:
+    //                 // メッセージを表示する
+    //                 packet = (idobata_packet *)r_buf;
+    //                 fprintf(stdout, "%s\n", packet->data);
+    //                 break;
+    //             default:
+    //                 break;
+    //                 // 何もしない
+    //         }
+    //     }
+    // }
 }
 
 int main(int argc, char *argv[]) {
@@ -547,9 +569,10 @@ int main(int argc, char *argv[]) {
         idobata_client(username, port_number);
 
     } else {
-        // サーバとして起動
         printf("Start as a server.\n");
+        // サーバとして起動
         idobata_server(username, port_number);
+        
     }
     exit(EXIT_SUCCESS);
 }
