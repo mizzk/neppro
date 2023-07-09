@@ -2,6 +2,9 @@
 21122051 MIZUTANI Kota
 2023年7月9日
 
+## 開発環境
+WSL2 Ubuntu 22.04 LTS
+
 ## 使用法
 ./idobata -u username [-p port_number]
 
