@@ -1,8 +1,20 @@
-#include <pthread.h>
+// KADAI 03
+// 21122051 MIZUTANI Kota
+
 #include "mynet.h"
+#include <pthread.h>
+#include <sys/wait.h>
 
 #define PORT 50000  /* デフォルトのポート番号 */
 #define BUFSIZE 100 /* バッファサイズ */
+#define FORK 0
+#define THREAD 1
+
+// スレッド関数の引数
+struct myarg {
+    int sock;
+    int id;
+};
 
 //getopt用の外部変数
 extern char *optarg;
@@ -69,38 +81,17 @@ void handle_client(int sock_accepted) {
     } while (1); /* 繰り返す */
 }
 
-// スレッドを生成する関数
+// スレッドで実行する関数
 void* create_thread(void* arg) {
-    printf("create_thread\n");
-    int sock_accepted = *(int*)arg;
-    handle_client(sock_accepted);
-    close(sock_accepted);
-    pthread_exit(NULL);
+    struct myarg *tharg;
+    tharg = (struct myarg *)arg;
+    pthread_detach(pthread_self());
+    handle_client(tharg->sock);
+    close(tharg->sock);
+    free(tharg);
+    return(NULL);
 }
 
-// 子プロセスを生成する関数
-void create_child_processes(int num_processes, int sock_listen) {
-    int i;
-    pid_t pid;
-    int sock_accepted;
-
-    for (i = 0; i < num_processes; i++) {
-        pid = fork();
-
-        if (pid < 0) {
-            exit_errmesg("fork()");
-        } else if (pid == 0) { /* child process */
-            /* クライアントの接続を受け付ける */
-            sock_accepted = accept(sock_listen, NULL, NULL);
-            close(sock_listen);
-
-            handle_client(sock_accepted);
-
-            close(sock_accepted);
-            exit(EXIT_SUCCESS);
-        }
-    }
-}
 
 // ここから実際の処理が始まる
 int main(int argc, char *argv[]) {
@@ -110,6 +101,8 @@ int main(int argc, char *argv[]) {
     int num_threads = 0;   //スレッド数
     int i; //ループ用変数
     int fork_thread_flag = -1; // 0:fork, 1:thread
+    struct myarg *tharg;
+    pthread_t tid;
 
 
     // オプションの解析
@@ -127,10 +120,10 @@ int main(int argc, char *argv[]) {
                 num_threads = atoi(optarg);
                 break;
             case 'f':
-                fork_thread_flag = 0;
+                fork_thread_flag = FORK;
                 break;
             case 't':
-                fork_thread_flag = 1;
+                fork_thread_flag = THREAD;
                 break;
             case 'h':
                 fprintf(stderr,"Usage: %s [-p port_number] [-n num_processes] [-f|-t]\n", argv[0]);
@@ -143,30 +136,50 @@ int main(int argc, char *argv[]) {
 
     // サーバの初期化
     sock_listen = init_tcpserver(port_number, 5);
-    printf("init_tcpserver: sock_listen = %d\n", sock_listen);
 
-    if (fork_thread_flag == 0) {
-        printf("fork\n");
-        create_child_processes(num_processes, sock_listen);
-    } else { // fork_thread_flag == 1
-        printf("thread\n");
-        pthread_t threads[num_threads];
-
-        for (i = 0; i < num_threads; i++) {
-            pthread_create(&threads[i], NULL, create_thread, (void*)&sock_listen);
+    // スレッドかフォークか判定して処理する
+    if (fork_thread_flag == FORK) {
+        pid_t child;
+        int num_p = 0;
+        for(i = 0; i < num_processes; i++){
+            if ((child = fork()) == 0) {
+                sock_accepted = accept(sock_listen, NULL, NULL);
+                handle_client(sock_accepted);
+                close(sock_accepted);
+            } else if (child > 0) {
+                num_p++;
+                close(sock_accepted);
+            } else {
+                exit_errmesg("fork()");
+            }
         }
 
-        for (i = 0; i < num_threads; i++) {
-            pthread_join(threads[i], NULL);
+        if (num_p == num_processes) {
+            child = wait(NULL);
+            num_p--;
         }
+        while((child = waitpid(-1, NULL, WNOHANG)) > 0){
+            num_p--;
+        }
+    } else { // fork_thread_flag == THREAD
+
+        for (i = 0; i < num_threads; i++) {
+            sock_accepted = accept(sock_listen, NULL, NULL);
+
+            if((tharg = (struct myarg *)malloc(sizeof(struct myarg))) == NULL){
+                exit_errmesg("malloc()");
+            }
+
+            tharg->sock = sock_accepted;
+            tharg->id = i;
+
+            if(pthread_create(&tid, NULL, create_thread, (void *)tharg) != 0){
+                exit_errmesg("pthread_create()");
+            }
+        }
+        pthread_exit(NULL);
     }
 
     close(sock_listen);
     exit(EXIT_SUCCESS);
 }
-
-
-
-
-
-
